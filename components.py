@@ -10,6 +10,16 @@ class CurrentId:
     def get_sign(self):
         return 1 if self.standard_direction else -1
 
+class Quantity:
+    def __init__(self, name, symbol, unit):
+        self.name = name
+        self.symbol = symbol
+        self.unit = unit
+    
+QTY_TIME = Quantity("Time", "t", "s")
+QTY_VOLTAGE = Quantity("Voltage", "U", "V")
+QTY_CURRENT = Quantity("Current", "I", "A")
+
 class Circuit:
     def __init__(self, delta_t, N_t):
         self.delta_t = delta_t
@@ -18,14 +28,17 @@ class Circuit:
         self.nodes = []
         self.components = []
         self.next_id = 0
-        self.id_symbols = []
+        self.id_quantity = []
         self.id_subscripts = []
         self.probe_id = []
 
-    def new_id(self, symbol, subscript="", probe=False):        
+    def new_id(self, quantity, subscript=None, probe=False):        
         self.next_id += 1
-        self.id_symbols.append(symbol)
-        self.id_subscripts.append([subscript])
+        self.id_quantity.append(quantity)
+        if subscript is None:
+            self.id_subscripts.append([])
+        else:
+            self.id_subscripts.append([subscript])
         self.probe_id.append(probe)
         return self.next_id - 1
     
@@ -35,12 +48,10 @@ class Circuit:
         self.probe_id[index] |= probe
         return CurrentId(index, standard_direction)
 
-    # id is the index for the VOLTAGE variable
     def add_nodes(self, nodes):
         for node in nodes:
             self.nodes.append(node)
     
-    # id is the index for the CURRENT variable
     def add_components(self, components):
         for component in components:
             self.components.append(component)
@@ -63,7 +74,7 @@ class Circuit:
             case 1:
                 print(f'Node "{node.name}" has only one connection.')
             case 2:
-                node.voltage_id = self.new_id("U", node.name, node.probe)
+                node.voltage_id = self.new_id(QTY_VOLTAGE, node.name, node.probe)
                 node.has_kcl_eq = False
 
                 current_index = None
@@ -82,7 +93,7 @@ class Circuit:
                         is_standard_direction = from_out == con.current_id.standard_direction
                 
                 if current_index is None:
-                    current_index = self.new_id("I")
+                    current_index = self.new_id(QTY_CURRENT)
                 
                 for con, to_out in zip(node.connections, node.connections_is_out):
                     if con.current_id is not None:
@@ -102,10 +113,10 @@ class Circuit:
                 return
 
         # Runs for con_count == 1 and con_count > 2
-        node.voltage_id = self.new_id("U", node.name)
+        node.voltage_id = self.new_id(QTY_VOLTAGE, node.name)
         for con, to_out in zip(node.connections, node.connections_is_out):
             if con.current_id is None:
-                con.current_id = CurrentId(self.new_id("I", con.name, con.probe), True)
+                con.current_id = CurrentId(self.new_id(QTY_CURRENT, con.name, con.probe), True)
                 if to_out:
                     self.id_search_node(self.nodes.index(con.n_in))
                 else:
@@ -116,10 +127,13 @@ class Circuit:
         dim = self.next_id
         A = np.zeros((dim, dim))
         b = np.zeros(dim)
-        states = np.zeros((self.N_t, dim))
+        states = np.empty((self.N_t, dim))
+        state0 = np.empty(dim)
+        state0[:] = np.nan
 
         n = 0
         for node in self.nodes:
+            state0[node.voltage_id] = node.U0
             if node.has_kcl_eq and not node.gnd:
                 A[n] = node.row_kcl_eq(dim)
                 b[n] = 0
@@ -130,8 +144,17 @@ class Circuit:
                 n += 1
         
         for component in self.components:
+            if not np.isnan(component.I0):
+                if np.isnan(state0[component.current_id.index]):
+                    state0[component.current_id.index] = component.current_id.get_sign() * component.I0
+                else:
+                    print(f"Conflicting initial current value for {self.id_quantity[n].symbol}({" ".join(self.id_subscripts[n])}), keeping value {state0[component.current_id.index]}.")
+
             component.row_comp_eq(A, b, n, self.delta_t)
             n += 1
+
+        state0[np.isnan(state0)] = 0
+        states[0] = state0
 
         for n_t in range(self.N_t - 1):
             for component in self.components:
@@ -144,8 +167,11 @@ class Circuit:
             if not self.probe_id[n]:
                 continue
             fig, ax = plt.subplots()
-            ax.plot(t, states[:, n])
-            ax.set_title(f"{self.id_symbols[n]}({" ".join(self.id_subscripts[n])})")
+            qty = self.id_quantity[n]
+            ax.plot(t, states[:, n], ".", markersize=4)
+            ax.set_title(f"{qty.symbol}({" ".join(self.id_subscripts[n])})")
+            ax.set_xlabel(f"{QTY_TIME.name}, ${QTY_TIME.symbol}$ [{QTY_TIME.unit}]")
+            ax.set_ylabel(f"{qty.name}, ${qty.symbol}$ [{qty.unit}]")
             figs.append(fig)
 
         plt.show()
@@ -153,9 +179,10 @@ class Circuit:
         return states
 
 class Node:
-    def __init__(self, name, gnd=False, probe=False):
+    def __init__(self, name, gnd=False, U0=0, probe=False):
         self.name = name
         self.gnd = gnd
+        self.U0 = U0
         self.is_dependent = gnd
         self.probe = probe
         
@@ -190,7 +217,7 @@ class Node:
 
 # Current is positive when flowing from in -> out
 class Component:
-    def __init__(self, n_in, n_out, name, probe=False):
+    def __init__(self, n_in, n_out, name, I0=None, probe=False):
         self.n_in = n_in
         self.n_in.in_connect(self)
 
@@ -198,6 +225,12 @@ class Component:
         self.n_out.out_connect(self)
 
         self.name = name
+
+        if I0 is None:
+            self.I0 = np.nan
+        else:
+            self.I0 = float(I0)
+
         self.probe = probe
 
         # Current as in electricity not as in "now"
@@ -211,8 +244,8 @@ class Component:
     
 
 class Resistor(Component):
-    def __init__(self, n_in, n_out, name, R, probe=False):
-        super().__init__(n_in, n_out, name, probe)
+    def __init__(self, n_in, n_out, name, R, I0=None, probe=False):
+        super().__init__(n_in, n_out, name, I0, probe)
         self.R = R
 
     # 0 = Uin - Uout - Rself * Iself
@@ -230,11 +263,11 @@ class Resistor(Component):
 
 
 class Capacitor(Component):
-    def __init__(self, n_in, n_out, name, C, probe=False):
-        super().__init__(n_in, n_out, name, probe)
+    def __init__(self, n_in, n_out, name, C, I0=None, probe=False):
+        super().__init__(n_in, n_out, name, I0, probe)
         self.C = C
     
-    # I(t+dt) * dt = C * ((U(t+dt) - U(t))
+    # I(t+dt) * dt = C * (U(t+dt) - U(t))
     # where: U(t) = Uin(t) - Uout(t)
     # C * (Uin(t) - Uout(t)) = C * Uin(t+dt) - C * Uout(t+dt) - I(t+dt) * dt
 
@@ -251,11 +284,36 @@ class Capacitor(Component):
     
     def modify_b(self, b, state):
         b[self.row_index] = self.C * (state[self.n_in.voltage_id] - state[self.n_out.voltage_id])
+
+
+class Inductor(Component):
+    def __init__(self, n_in, n_out, name, L, I0=None, probe=False):
+        super().__init__(n_in, n_out, name, I0, probe)
+        self.L = L
+    
+    # (Uin(t+dt) - Uout(t+dt)) * dt = L * (I(t+dt) - I(t))
+
+    # L * I(t) = L * I(t+dt) - (Uin(t+dt) - Uout(t+dt)) * dt
+    # L * I(t) = L * I(t+dt) - Uin(t+dt) * dt + Uout(t+dt) * dt
+
+    # in A: L * I(t+dt) - Uin(t+dt) * dt + Uout(t+dt) * dt
+    # in b: L * I(t)
+
+    def row_comp_eq(self, A, b, row_index, delta_t):
+        super().row_comp_eq(A, b, row_index, delta_t)
+
+        An = A[self.row_index]
+        An[self.current_id.index] = self.current_id.get_sign() * self.L
+        An[self.n_in.voltage_id] = -delta_t
+        An[self.n_out.voltage_id] = delta_t
+    
+    def modify_b(self, b, state):
+        b[self.row_index] = self.L * state[self.current_id.index] * self.current_id.get_sign()
     
 
 class VoltageSource(Component):
-    def __init__(self, n_in, n_out, name, U, probe=False):
-        super().__init__(n_in, n_out, name, probe)
+    def __init__(self, n_in, n_out, name, U, I0=None, probe=False):
+        super().__init__(n_in, n_out, name, I0, probe)
         self.U = U
     
     # Uself = Uout - Uin
@@ -273,5 +331,5 @@ class VoltageSource(Component):
         
 
 class CurrentSource(Component):
-    def __init__(self, n_in, n_out, name, probe=False):
-        super().__init__(n_in, n_out, name, probe)
+    def __init__(self, n_in, n_out, name, I0=None, probe=False):
+        super().__init__(n_in, n_out, name, I0, probe)
