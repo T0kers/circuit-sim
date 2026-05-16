@@ -153,7 +153,9 @@ class Circuit:
             component.row_comp_eq(A, b, n, self.delta_t)
             n += 1
 
-        state0[np.isnan(state0)] = 0
+        if np.any(np.isnan(state0)):
+            print("Initial value for unspecified components / nodes are set to 0.")
+            state0[np.isnan(state0)] = 0
         states[0] = state0
 
         for n_t in range(self.N_t - 1):
@@ -216,7 +218,7 @@ class Node:
         return len(self.connections)
 
 # Current is positive when flowing from in -> out
-class Component:
+class Component2:
     def __init__(self, n_in, n_out, name, I0=None, probe=False):
         self.n_in = n_in
         self.n_in.in_connect(self)
@@ -243,7 +245,7 @@ class Component:
         pass
     
 
-class Resistor(Component):
+class Resistor(Component2):
     def __init__(self, n_in, n_out, name, R, I0=None, probe=False):
         super().__init__(n_in, n_out, name, I0, probe)
         self.R = R
@@ -262,7 +264,7 @@ class Resistor(Component):
         b[self.row_index] = 0
 
 
-class Capacitor(Component):
+class Capacitor(Component2):
     def __init__(self, n_in, n_out, name, C, I0=None, probe=False):
         super().__init__(n_in, n_out, name, I0, probe)
         self.C = C
@@ -286,7 +288,7 @@ class Capacitor(Component):
         b[self.row_index] = self.C * (state[self.n_in.voltage_id] - state[self.n_out.voltage_id])
 
 
-class Inductor(Component):
+class Inductor(Component2):
     def __init__(self, n_in, n_out, name, L, I0=None, probe=False):
         super().__init__(n_in, n_out, name, I0, probe)
         self.L = L
@@ -311,7 +313,7 @@ class Inductor(Component):
         b[self.row_index] = self.L * state[self.current_id.index] * self.current_id.get_sign()
     
 
-class VoltageSource(Component):
+class VoltageSource(Component2):
     def __init__(self, n_in, n_out, name, U, I0=None, probe=False):
         super().__init__(n_in, n_out, name, I0, probe)
         self.U = U
@@ -330,6 +332,7 @@ class VoltageSource(Component):
         b[self.row_index] = self.U
         
 
-class CurrentSource(Component):
+class CurrentSource(Component2):
     def __init__(self, n_in, n_out, name, I0=None, probe=False):
         super().__init__(n_in, n_out, name, I0, probe)
+

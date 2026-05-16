@@ -1,4 +1,4 @@
-from components import *
+from sim1 import *
 
 
 def series_with_singular():
