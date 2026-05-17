@@ -30,31 +30,35 @@ class Circuit:
         return count
 
     def solve(self):
-        dim = self.total_eq_count()
-        print("Dim:", dim)
+        state0 = np.array(Con.initial_values)
+        dim = np.size(state0)
+
         A = np.zeros((dim, dim))
         b = np.zeros(dim)
         states = np.empty((self.N_t, dim))
-        state0 = np.empty(dim)
-        state0[:] = np.nan
+        states[0] = state0
 
         n = 0
         for node in self.nodes:
-            state0[node.voltage_id] = node.U0
             if node.has_kcl_eq and not node.gnd:
                 node.row_kcl_eq(A[n])
                 b[n] = 0
                 n += 1
             if node.gnd:
-                A[n, node.voltage_id] = 1
+                A[n, node.id] = 1
                 b[n] = 0
                 n += 1
+        for n_t in range(self.N_t - 1):
+            for comp in self.comps:
+                comp.modify_b(b, states[n_t])
+            states[n_t + 1] = np.linalg.solve(A, b)
+        
 
 class Node:
     def __init__(self, name=None, gnd=False, U0=0, probe=False):
         self.name = name
         self.gnd = gnd
-        self.U0 = U0
+        self.id = Con.new_id(self.name, U0, probe)
         self.probe = probe
         
         self.cons = []
@@ -62,17 +66,17 @@ class Node:
         self.has_kcl_eq = True
         if self.gnd:
             self.has_kcl_eq = False
-        self.voltage_id = None
+        
     
-    def connect(self, comp, out):
-        comp.out = out
-        self.cons.append(comp)
+    def connect(self, con, out):
+        con.out = out
+        self.cons.append(con)
 
     def row_kcl_eq(self, An):
         # 0 = sum(Iin) - sum(Iout)
 
         for con in self.cons:
-            An[con.id] = -1 if self.out else 1
+            An[con.id] = -1 if con.out else 1
 
 class Con:
     ids = []
@@ -111,15 +115,11 @@ class Component:
     def __init__(self, ins: list[Con], outs: list[Con], name: str=None):
         self.ins = ins
         for i in self.ins:
-            if i.I0() is None:
-                i.I0(np.nan)
-            i.node.connect(self, False)
+            i.node.connect(i, False)
         
         self.outs = outs
         for o in self.outs:
-            if o.I0() is None:
-                o.I0(np.nan)
-            o.node.connect(self, True)
+            o.node.connect(o, True)
         
         self.name = name
     
@@ -140,19 +140,19 @@ class Component:
 class Component2(Component):
     has_kcl = False
     eq_count = 1
-    def __init__(self, n_in, n_out, name=None, I0=None, probe=False):
+    def __init__(self, n_in, n_out, name=None, I0=0, probe=False):
         id = Con.new_id(name, I0, probe)
         ins  = [Con(n_in, id)]
         outs = [Con(n_out, id)]
         super().__init__(ins, outs, name)
 
 class Resistor(Component2):
-    def __init__(self, n_in, n_out, R, name=None, I0=None, probe=False):
+    def __init__(self, n_in, n_out, R, name=None, I0=0, probe=False):
         super().__init__(n_in, n_out, name, I0, probe)
         self.R = R
 
 class VoltageSource(Component2):
-    def __init__(self, n_in, n_out, U, name=None, I0=None, probe=False):
+    def __init__(self, n_in, n_out, U, name=None, I0=0, probe=False):
         super().__init__(n_in, n_out, name, I0, probe)
         self.U = U
 
