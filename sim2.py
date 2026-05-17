@@ -48,10 +48,14 @@ class Circuit:
                 A[n, node.id] = 1
                 b[n] = 0
                 n += 1
+        for comp in self.comps:
+            comp.row_comp_eq(A, b, n, self.delta_t)
+            n += type(comp).eq_count
         for n_t in range(self.N_t - 1):
             for comp in self.comps:
                 comp.modify_b(b, states[n_t])
             states[n_t + 1] = np.linalg.solve(A, b)
+        return states
         
 
 class Node:
@@ -133,7 +137,7 @@ class Component:
         for o in self.ins:
             An[o.id] = -1
     
-    def modify_b(self, b, n, state):
+    def modify_b(self, b, state):
         pass
 
 
@@ -142,19 +146,41 @@ class Component2(Component):
     eq_count = 1
     def __init__(self, n_in, n_out, name=None, I0=0, probe=False):
         id = Con.new_id(name, I0, probe)
-        ins  = [Con(n_in, id)]
-        outs = [Con(n_out, id)]
-        super().__init__(ins, outs, name)
+        self.node_in  = Con(n_in, id)
+        self.node_out = Con(n_out, id)
+        super().__init__([self.node_in], [self.node_out], name)
+    
+    def row_comp_eq(self, A, b, n, delta_t):
+        self.row_index = n
 
 class Resistor(Component2):
     def __init__(self, n_in, n_out, R, name=None, I0=0, probe=False):
         super().__init__(n_in, n_out, name, I0, probe)
         self.R = R
+    
+    def row_comp_eq(self, A, b, n, delta_t):
+        super().row_comp_eq(A, b, n, delta_t)
+
+        An = A[self.row_index]
+        An[self.node_in.node.id] = 1
+        An[self.node_out.node.id] = -1
+        An[self.node_in.id] = self.R
+
+        b[self.row_index] = 0
 
 class VoltageSource(Component2):
     def __init__(self, n_in, n_out, U, name=None, I0=0, probe=False):
         super().__init__(n_in, n_out, name, I0, probe)
         self.U = U
+    
+    def row_comp_eq(self, A, b, n, delta_t):
+        super().row_comp_eq(A, b, n, delta_t)
+
+        An = A[self.row_index]
+        An[self.node_out.node.id] = 1
+        An[self.node_in.node.id] = -1
+
+        b[self.row_index] = self.U
 
 # class OpAmp(Component):
 #     # n_ins[0] = n_plus
